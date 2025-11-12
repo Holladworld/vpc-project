@@ -1,0 +1,21 @@
+{
+  "rules": [
+    {
+      "subnet": "10.0.1.0/24",
+      "ingress": [
+        {"port": 80, "protocol": "tcp", "action": "allow"},
+        {"port": 443, "protocol": "tcp", "action": "allow"},
+        {"port": 22, "protocol": "tcp", "action": "deny"},
+        {"port": 3389, "protocol": "tcp", "action": "deny"}
+      ]
+    },
+    {
+      "subnet": "10.0.2.0/24",
+      "ingress": [
+        {"port": 22, "protocol": "tcp", "action": "allow"},
+        {"port": 80, "protocol": "tcp", "action": "deny"},
+        {"port": 443, "protocol": "tcp", "action": "deny"}
+      ]
+    }
+  ]
+}

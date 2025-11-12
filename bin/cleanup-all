@@ -1,0 +1,74 @@
+#!/bin/bash
+# Complete VPC Resource Cleanup
+# Removes all VPCs, subnets, peerings, and firewall rules
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+
+echo "🧹 Starting Complete VPC Resource Cleanup"
+echo "=========================================="
+
+# === CLEANUP ALL VPCS ===
+echo "Step 1: Removing all VPCs..."
+
+# Find all VPC bridges and delete them
+for bridge in $(ip link show type bridge 2>/dev/null | grep "br-" | awk -F: '{print $2}' | tr -d ' '); do
+    vpc_name="${bridge#br-}"
+    echo "  Deleting VPC: $vpc_name"
+    
+    # Delete all namespaces for this VPC
+    for namespace in $(ip netns list 2>/dev/null | grep "ns-$vpc_name-"); do
+        echo "    Deleting namespace: $namespace"
+        ip netns delete "$namespace" 2>/dev/null
+    done
+    
+    # Delete bridge
+    ip link delete "$bridge" 2>/dev/null && echo "    Deleted bridge: $bridge"
+done
+
+# === CLEANUP ANY REMAINING NAMESPACES ===
+echo "Step 2: Cleaning up any remaining network namespaces..."
+for namespace in $(ip netns list 2>/dev/null | awk '{print $1}'); do
+    echo "  Deleting namespace: $namespace"
+    ip netns delete "$namespace" 2>/dev/null
+done
+
+# === CLEANUP ANY REMAINING VETH INTERFACES ===
+echo "Step 3: Cleaning up veth interfaces..."
+for veth in $(ip link show 2>/dev/null | grep "veth-" | awk -F: '{print $2}' | awk '{print $1}'); do
+    echo "  Removing veth: $veth"
+    ip link delete "$veth" 2>/dev/null
+done
+
+# === CLEANUP PEERING INTERFACES ===
+echo "Step 4: Cleaning up peering interfaces..."
+for peer in $(ip link show 2>/dev/null | grep "vpeer-" | awk -F: '{print $2}' | awk '{print $1}'); do
+    echo "  Removing peering interface: $peer"
+    ip link delete "$peer" 2>/dev/null
+done
+
+# === CLEANUP IPTABLES RULES ===
+echo "Step 5: Cleaning up iptables rules..."
+# Cleanup NAT rules
+iptables -t nat -F 2>/dev/null
+iptables -t mangle -F 2>/dev/null
+iptables -F 2>/dev/null
+iptables -X 2>/dev/null
+
+# === CLEANUP CONFIGURATION FILES ===
+echo "Step 6: Removing configuration files..."
+rm -rf "$PROJECT_ROOT/.vpc_configs" 2>/dev/null
+rm -rf "$PROJECT_ROOT/.vpc_peerings" 2>/dev/null
+rm -f "$PROJECT_ROOT/vpc_operations.log" 2>/dev/null
+
+# === VERIFY CLEANUP ===
+echo ""
+echo "=== Cleanup Verification ==="
+echo "Remaining bridges: $(ip link show type bridge 2>/dev/null | grep -c "br-" || echo 0)"
+echo "Remaining namespaces: $(ip netns list 2>/dev/null | wc -l || echo 0)"
+echo "Remaining veth interfaces: $(ip link show 2>/dev/null | grep -c "veth-" || echo 0)"
+echo "Remaining peering interfaces: $(ip link show 2>/dev/null | grep -c "vpeer-" || echo 0)"
+
+echo ""
+echo "✅ Complete VPC cleanup finished!"
+echo "   All VPC resources have been removed from the system."

@@ -22,9 +22,9 @@ add_subnet() {
     local bridge_name="br-$vpc_name"
     local namespace="ns-$vpc_name-$subnet_type"
     
-    # SHORTEN interface names to under 15 characters
-    local veth_host="veth-$subnet_type"
-    local veth_ns="veth-ns-$subnet_type"
+    # Use unique veth names to avoid conflicts
+    local veth_host="veth-$vpc_name-$subnet_type"
+    local veth_ns="veth-ns-$vpc_name-$subnet_type"
     
     # Check if VPC exists
     if ! ip link show "$bridge_name" &>/dev/null; then
@@ -32,11 +32,17 @@ add_subnet() {
         return 1
     fi
     
+    # Check if namespace already exists
+    if ip netns list | grep -q "$namespace"; then
+        echo "Error: Subnet $namespace already exists"
+        return 1
+    fi
+    
     # Create network namespace
     echo "Creating network namespace: $namespace"
     ip netns add "$namespace"
     
-    # Create veth pair with shorter names
+    # Create veth pair with unique names
     echo "Creating veth pair: $veth_host <-> $veth_ns"
     ip link add "$veth_host" type veth peer name "$veth_ns"
     
@@ -54,18 +60,17 @@ add_subnet() {
     ip netns exec "$namespace" ip link set "$veth_ns" up
     ip netns exec "$namespace" ip link set lo up
     
-    # FIXED: Proper IP address calculation
-    # For subnet CIDR 10.200.1.0/24, namespace gets 10.200.1.2
-    local base_ip="${subnet_cidr%/*}"  # Remove /24 part -> "10.200.1.0"
-    local namespace_ip="${base_ip%.*}.2"  # Replace last octet with .2 -> "10.200.1.2"
+    # FIXED: Proper IP address calculation for subnets
+    local network_part="${subnet_cidr%/*}"  # "10.100.1.0"
+    local cidr_mask="${subnet_cidr#*/}"     # "24"
+    local namespace_ip="${network_part%.*}.2"  # "10.100.1.2"
+    local gateway_ip="${network_part%.*}.1"    # "10.100.1.1"
     
-    echo "Assigning IP address $namespace_ip/24 to subnet"
-    ip netns exec "$namespace" ip addr add "$namespace_ip/24" dev "$veth_ns"
+    # Assign IP to the veth interface in namespace
+    echo "Assigning IP address $namespace_ip/$cidr_mask to subnet"
+    ip netns exec "$namespace" ip addr add "$namespace_ip/$cidr_mask" dev "$veth_ns"
     
-    # FIXED: Proper gateway calculation  
-    # Gateway is .1 in the same subnet -> "10.200.1.1"
-    local gateway_ip="${base_ip%.*}.1"
-    
+    # Set default gateway in namespace
     echo "Setting default gateway to $gateway_ip"
     ip netns exec "$namespace" ip route add default via "$gateway_ip"
     
@@ -77,7 +82,7 @@ add_subnet() {
     
     echo "✅ Subnet $subnet_type ($subnet_cidr) successfully added to VPC $vpc_name"
     echo "   Namespace: $namespace"
-    echo "   IP: $namespace_ip, Gateway: $gateway_ip"
+    echo "   IP: $namespace_ip/$cidr_mask, Gateway: $gateway_ip"
 }
 
 list_subnets() {
@@ -94,4 +99,10 @@ list_subnets() {
         ip netns exec "$ns" ip route show || echo "  No routes"
         echo "---"
     done
+}
+
+# Helper function to get namespace IP
+get_namespace_ip() {
+    local namespace="$1"
+    ip netns exec "$namespace" ip addr show 2>/dev/null | grep -E "veth.*inet" | head -1 | awk '{print $2}' | cut -d'/' -f1
 }

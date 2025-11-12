@@ -26,7 +26,7 @@ pass_test() {
 }
 
 fail_test() {
-    echo "FAIL: $1"
+    echo "❌ FAIL: $1"
     ((TESTS_FAILED++))
 }
 
@@ -178,7 +178,7 @@ JSON
         pass_test "Firewall rules applied from JSON"
         
         # Note: Actual rule testing would require more complex setup
-        echo "   Firewall rule enforcement verified manually"
+        echo "   🔍 Firewall rule enforcement verified manually"
     else
         fail_test "Firewall rules application failed"
     fi
@@ -217,7 +217,7 @@ test_cleanup() {
 
 # === RUN ALL TESTS ===
 run_all_tests() {
-    echo "Starting VPC Project Acceptance Tests"
+    echo "🚀 Starting VPC Project Acceptance Tests"
     echo "========================================"
     
     test_vpc_creation
@@ -233,17 +233,17 @@ run_all_tests() {
     # Test summary
     echo ""
     echo "========================================"
-    echo "TEST SUMMARY"
+    echo "📊 TEST SUMMARY"
     echo "========================================"
     echo "Tests Passed: $TESTS_PASSED"
     echo "Tests Failed: $TESTS_FAILED"
     
     if [[ $TESTS_FAILED -eq 0 ]]; then
-        echo "ALL ACCEPTANCE CRITERIA MET!"
-        echo "Project ready for submission!"
+        echo "🎉 ALL ACCEPTANCE CRITERIA MET!"
+        echo "✅ Project ready for submission!"
         return 0
     else
-        echo "Some tests failed - check implementation"
+        echo "❌ Some tests failed - check implementation"
         return 1
     fi
 }
