@@ -73,19 +73,20 @@ create_peering() {
     echo "VPC $vpc1 CIDR: $vpc1_cidr"
     echo "VPC $vpc2 CIDR: $vpc2_cidr"
     
-    # FIXED: Calculate proper gateway IPs
-    local vpc1_network="${vpc1_cidr%/*}"
-    local vpc2_network="${vpc2_cidr%/*}"
-    local vpc1_gateway="${vpc1_network%.*}.1"
-    local vpc2_gateway="${vpc2_network%.*}.1"
+    # FIXED: Calculate proper gateway IPs using the bridge IPs
+    local vpc1_gateway=$(get_bridge_ip "$vpc1")
+    local vpc2_gateway=$(get_bridge_ip "$vpc2")
+    
+    echo "VPC $vpc1 Gateway: $vpc1_gateway"
+    echo "VPC $vpc2 Gateway: $vpc2_gateway"
     
     # Add routes to each VPC
     if ! add_peering_route "$vpc1" "$vpc2_cidr" "$vpc2_gateway"; then
-        echo "Warning: Failed to add routes to VPC $vpc1"
+        echo "Warning: Failed to add some routes to VPC $vpc1"
     fi
     
     if ! add_peering_route "$vpc2" "$vpc1_cidr" "$vpc1_gateway"; then
-        echo "Warning: Failed to add routes to VPC $vpc2"
+        echo "Warning: Failed to add some routes to VPC $vpc2"
     fi
     
     # Save peering configuration
@@ -95,6 +96,14 @@ create_peering() {
     echo "   Subnets can now communicate across VPCs"
 }
 
+# === GET BRIDGE IP ===
+get_bridge_ip() {
+    local vpc_name="$1"
+    local bridge_name="br-$vpc_name"
+    
+    # Get the first IP address from the bridge
+    ip addr show "$bridge_name" 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d'/' -f1
+}
 
 # === CHECK IF PEERING EXISTS ===
 check_peering_exists() {
@@ -276,12 +285,14 @@ test_isolation() {
     
     echo "=== Testing VPC Isolation: $vpc1 vs $vpc2 ==="
     
-    # Get first public subnet from each VPC
-    local vpc1_subnet=$(ip netns list | grep "ns-$vpc1-public" | head -1)
-    local vpc2_subnet=$(ip netns list | grep "ns-$vpc2-public" | head -1)
+    # FIXED: Get ANY subnet from each VPC (not just public)
+    local vpc1_subnet=$(ip netns list | grep "ns-$vpc1-" | head -1)
+    local vpc2_subnet=$(ip netns list | grep "ns-$vpc2-" | head -1)
     
     if [[ -z "$vpc1_subnet" || -z "$vpc2_subnet" ]]; then
-        echo "Error: Both VPCs need at least one public subnet"
+        echo "Error: Both VPCs need at least one subnet (any type)"
+        echo "Available subnets for $vpc1: $(ip netns list | grep "ns-$vpc1-" || echo "none")"
+        echo "Available subnets for $vpc2: $(ip netns list | grep "ns-$vpc2-" || echo "none")"
         return 1
     fi
     
@@ -291,6 +302,8 @@ test_isolation() {
     
     if [[ -z "$vpc1_ip" || -z "$vpc2_ip" ]]; then
         echo "Error: Could not get IP addresses from subnets"
+        echo "VPC1 $vpc1_subnet IP: $vpc1_ip"
+        echo "VPC2 $vpc2_subnet IP: $vpc2_ip"
         return 1
     fi
     
@@ -323,8 +336,8 @@ test_isolation() {
 get_namespace_ip() {
     local namespace="$1"
     
-    # Get the first non-loopback IP address
-    ip netns exec "$namespace" ip addr show 2>/dev/null | grep -E "veth.*inet" | head -1 | awk '{print $2}' | cut -d'/' -f1
+    # FIXED: Better IP detection that works with our interface names
+    ip netns exec "$namespace" ip addr show 2>/dev/null | grep -E "inet.*vn" | head -1 | awk '{print $2}' | cut -d'/' -f1
 }
 
 # === DEPLOY TEST APPLICATION ===

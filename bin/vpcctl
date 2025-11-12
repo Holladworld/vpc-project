@@ -12,9 +12,35 @@ source "$PROJECT_ROOT/lib/peering.sh"
 source "$PROJECT_ROOT/lib/nat_gateway.sh"
 source "$PROJECT_ROOT/config/defaults.sh"
 
+# Check if command requires root
+requires_root() {
+    local command="$1"
+    case "$command" in
+        create-vpc|delete-vpc|add-subnet|enable-nat|create-peering|delete-peering|deploy-app|test-connectivity|test-isolation|cleanup-all)
+            return 0  # Requires root
+            ;;
+        list-vpcs|list-subnets|list-peerings)
+            return 1  # Doesn't require root (or handles it internally)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # Main dispatcher
 main() {
-    case "$1" in
+    local command="$1"
+    
+    # Check if command requires root
+    if requires_root "$command"; then
+        if [[ $EUID -ne 0 ]]; then
+            echo "Error: This command requires root privileges. Use: sudo $0 $*"
+            return 1
+        fi
+    fi
+    
+    case "$command" in
         create-vpc)        create_vpc "$2" "$3" ;;
         delete-vpc)        delete_vpc "$2" ;;
         add-subnet)        add_subnet "$2" "$3" "$4" ;;
@@ -27,7 +53,7 @@ main() {
         test-isolation)    test_isolation "$2" "$3" ;;
         deploy-app)        deploy_app "$2" "$3" "$4" ;;
         run-tests)         run_tests ;;
-        cleanup-all)       "$SCRIPT_DIR/cleanup-all" ;;  # Call the cleanup script
+        cleanup-all)       cleanup_all ;;
         list-vpcs)         list_vpcs ;;
         list-subnets)      list_subnets ;;  
         *)                 show_usage ;;
@@ -38,13 +64,17 @@ show_usage() {
     echo "VPC Management System"
     echo "Usage: $0 {create-vpc|delete-vpc|add-subnet|enable-nat|create-peering|delete-peering|list-peerings|apply-firewall|test-connectivity|test-isolation|deploy-app|run-tests|cleanup-all|list-vpcs|list-subnets}"
     echo ""
-    echo "Examples:"
-    echo "  sudo $0 create-vpc prod-vpc 10.0.0.0/16"
-    echo "  sudo $0 add-subnet prod-vpc public 10.0.1.0/24"
-    echo "  sudo $0 apply-firewall prod-vpc firewall_rules.json"
-    echo "  sudo $0 deploy-app prod-vpc public nginx"
-    echo "  sudo $0 run-tests                          # Run all acceptance tests"
-    echo "  sudo $0 cleanup-all                        # Remove all VPC resources"
+    echo "Commands requiring sudo:"
+    echo "  sudo $0 create-vpc <vpc_name> <cidr_block>"
+    echo "  sudo $0 add-subnet <vpc_name> <public|private> <subnet_cidr>"
+    echo "  sudo $0 enable-nat <vpc_name>"
+    echo "  sudo $0 create-peering <vpc1> <vpc2>"
+    echo "  sudo $0 deploy-app <vpc_name> <subnet_type> <nginx|python>"
+    echo ""
+    echo "Commands that don't require sudo:"
+    echo "  $0 list-vpcs"
+    echo "  $0 list-subnets"
+    echo "  $0 list-peerings"
 }
 
 if [ $# -eq 0 ]; then

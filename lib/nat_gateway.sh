@@ -1,7 +1,5 @@
 #!/bin/bash
 # NAT Gateway and Routing Functions
-# Handles internet access for public subnets and VPC routing
-# Implements AWS-style NAT gateway behavior
 
 # === ENABLE NAT FOR VPC ===
 enable_nat() {
@@ -26,17 +24,9 @@ enable_nat() {
     # === ENABLE IP FORWARDING ON HOST ===
     echo "Enabling IP forwarding on host"
     echo 1 > /proc/sys/net/ipv4/ip_forward
-    # Explanation:
-    # - This allows the host to route packets between interfaces
-    # - Essential for NAT to work
-    # - Without this, packets won't be forwarded between subnets and internet
     
     # === GET PUBLIC INTERFACE ===
     local public_interface=$(ip route show default | awk '/default/ {print $5}')
-    # Explanation:
-    # - `ip route show default` shows the default route (to internet)
-    # - `awk '/default/ {print $5}'` extracts the interface name
-    # - This finds which interface connects to the internet
     
     if [[ -z "$public_interface" ]]; then
         echo "Error: Could not determine internet interface"
@@ -49,13 +39,14 @@ enable_nat() {
     echo "Finding public subnets in VPC $vpc_name"
     local public_subnets=()
     
-    # Look for public subnet namespaces
+    # FIXED: Handle namespace IDs properly
     for namespace in $(ip netns list | grep "ns-$vpc_name-public"); do
+        local clean_namespace=$(echo "$namespace" | sed 's/ (id:[0-9]*)//g')
         # Get the subnet CIDR from the namespace
-        local subnet_cidr=$(get_subnet_cidr "$namespace")
+        local subnet_cidr=$(get_subnet_cidr "$clean_namespace")
         if [[ -n "$subnet_cidr" ]]; then
             public_subnets+=("$subnet_cidr")
-            echo "Found public subnet: $subnet_cidr"
+            echo "Found public subnet: $subnet_cidr (namespace: $clean_namespace)"
         fi
     done
     
@@ -83,8 +74,7 @@ get_subnet_cidr() {
     local namespace="$1"
     
     # Get the IP address from the veth interface in the namespace
-    # Example output: "inet 10.0.1.2/24" -> we want "10.0.1.0/24"
-    local ip_info=$(ip netns exec "$namespace" ip addr show | grep -E "veth-ns.*inet " | head -1)
+    local ip_info=$(ip netns exec "$namespace" ip addr show 2>/dev/null | grep -E "vn.*inet" | head -1)
     
     if [[ -n "$ip_info" ]]; then
         # Extract IP/CIDR part: "inet 10.0.1.2/24" -> "10.0.1.2/24"
@@ -96,9 +86,6 @@ get_subnet_cidr() {
         
         echo "${base_ip}/${cidr_mask}"
     fi
-    # Explanation:
-    # - We need to convert interface IP (10.0.1.2) to subnet CIDR (10.0.1.0/24)
-    # - This tells iptables which entire subnet to NAT
 }
 
 # === SETUP NAT RULES ===
@@ -115,13 +102,6 @@ setup_nat_rules() {
         iptables -t nat -A POSTROUTING -s "$subnet_cidr" -o "$public_interface" -j MASQUERADE
         echo "  Added MASQUERADE rule for $subnet_cidr -> $public_interface"
     fi
-    # Explanation:
-    # - `-t nat` = Use nat table (for address translation)
-    # - `POSTROUTING` = Apply rule after routing decision (on way out)
-    # - `-s "$subnet_cidr"` = Match traffic from this subnet
-    # - `-o "$public_interface"` = Match traffic going out to internet
-    # - `-j MASQUERADE` = Rewrite source address to use interface's IP
-    # - This makes internet responses come back to the host
     
     # === FORWARDING RULES (ALLOW TRAFFIC FLOW) ===
     # Allow forwarding FROM public subnets TO internet
@@ -135,10 +115,6 @@ setup_nat_rules() {
         iptables -A FORWARD -d "$subnet_cidr" -i "$public_interface" -m state --state ESTABLISHED,RELATED -j ACCEPT
         echo "  Added FORWARD rule: internet -> $subnet_cidr (established)"
     fi
-    # Explanation:
-    # - `FORWARD` chain handles packets being routed through the host
-    # - `-m state --state ESTABLISHED,RELATED` matches ongoing connections
-    # - This allows responses to come back to the public subnets
 }
 
 # === SETUP VPC ISOLATION ===
@@ -152,10 +128,6 @@ setup_vpc_isolation() {
         iptables -A FORWARD -i "br-$vpc_name" -o "br-$vpc_name" -j ACCEPT
         echo "  Added internal VPC forwarding: br-$vpc_name <-> br-$vpc_name"
     fi
-    # Explanation:
-    # - This allows subnets within same VPC to communicate
-    # - Traffic between br-$vpc_name interfaces is allowed
-    # - But different VPCs can't talk unless we explicitly allow it
 }
 
 # === TEST CONNECTIVITY ===
@@ -171,23 +143,24 @@ test_connectivity() {
     echo "=== Testing Connectivity for VPC: $vpc_name ==="
     
     # Test public subnets
-    for ns in $(ip netns list | grep "ns-$vpc_name-public"); do
+    for namespace in $(ip netns list | grep "ns-$vpc_name-public"); do
+        local clean_ns=$(echo "$namespace" | sed 's/ (id:[0-9]*)//g')
         echo ""
-        echo "Testing PUBLIC subnet: $ns"
+        echo "Testing PUBLIC subnet: $clean_ns"
         
         # Test internet access
         echo -n "  Internet access: "
-        if ip netns exec "$ns" ping -c 1 -W 1 8.8.8.8 &>/dev/null; then
+        if ip netns exec "$clean_ns" ping -c 1 -W 1 8.8.8.8 &>/dev/null; then
             echo "✅ WORKS"
         else
             echo "❌ FAILED"
         fi
         
         # Test gateway access
-        local gateway=$(get_gateway_for_namespace "$ns")
+        local gateway=$(get_gateway_for_namespace "$clean_ns")
         if [[ -n "$gateway" ]]; then
             echo -n "  Gateway access ($gateway): "
-            if ip netns exec "$ns" ping -c 1 -W 1 "$gateway" &>/dev/null; then
+            if ip netns exec "$clean_ns" ping -c 1 -W 1 "$gateway" &>/dev/null; then
                 echo "✅ WORKS"
             else
                 echo "❌ FAILED"
@@ -196,23 +169,24 @@ test_connectivity() {
     done
     
     # Test private subnets
-    for ns in $(ip netns list | grep "ns-$vpc_name-private"); do
+    for namespace in $(ip netns list | grep "ns-$vpc_name-private"); do
+        local clean_ns=$(echo "$namespace" | sed 's/ (id:[0-9]*)//g')
         echo ""
-        echo "Testing PRIVATE subnet: $ns"
+        echo "Testing PRIVATE subnet: $clean_ns"
         
         # Test internet access (should fail)
         echo -n "  Internet access: "
-        if ip netns exec "$ns" ping -c 1 -W 1 8.8.8.8 &>/dev/null; then
+        if ip netns exec "$clean_ns" ping -c 1 -W 1 8.8.8.8 &>/dev/null; then
             echo "❌ UNEXPECTED SUCCESS (private subnet should be isolated)"
         else
             echo "✅ CORRECTLY ISOLATED"
         fi
         
         # Test gateway access
-        local gateway=$(get_gateway_for_namespace "$ns")
+        local gateway=$(get_gateway_for_namespace "$clean_ns")
         if [[ -n "$gateway" ]]; then
             echo -n "  Gateway access ($gateway): "
-            if ip netns exec "$ns" ping -c 1 -W 1 "$gateway" &>/dev/null; then
+            if ip netns exec "$clean_ns" ping -c 1 -W 1 "$gateway" &>/dev/null; then
                 echo "✅ WORKS"
             else
                 echo "❌ FAILED"
@@ -230,10 +204,6 @@ get_gateway_for_namespace() {
     
     # Get the default gateway from namespace's routing table
     ip netns exec "$namespace" ip route show default 2>/dev/null | awk '/default/ {print $3}'
-    # Explanation:
-    # - `ip route show default` shows the default route
-    # - `awk '/default/ {print $3}'` extracts the gateway IP
-    # - Returns the gateway IP or empty string if no route
 }
 
 # === CLEANUP NAT RULES ===
@@ -242,7 +212,153 @@ cleanup_nat_rules() {
     
     echo "Cleaning up NAT rules for VPC: $vpc_name"
     
-    # This function would remove iptables rules when VPC is deleted
-    # We'll implement this in the cleanup phase
-    echo "NAT cleanup will be implemented in deletion phase"
+    # Remove MASQUERADE rules for this VPC
+    iptables -t nat -S | grep "br-$vpc_name" | while read rule; do
+        iptables -t nat -D ${rule#-A}
+    done
+    
+    # Remove FORWARD rules for this VPC
+    iptables -S | grep "br-$vpc_name" | while read rule; do
+        iptables -D ${rule#-A}
+    done
+    
+    echo "Cleaned up NAT rules for VPC $vpc_name"
+}
+
+# === GET PUBLIC INTERFACE ===
+get_public_interface() {
+    ip route show default | awk '/default/ {print $5}'
+}
+
+# === VERIFY NAT SETUP ===
+verify_nat_setup() {
+    local vpc_name="$1"
+    
+    echo "=== Verifying NAT Setup for VPC: $vpc_name ==="
+    
+    echo "1. Checking NAT rules:"
+    iptables -t nat -L POSTROUTING -n -v | grep -E "MASQUERADE|br-$vpc_name" || echo "  No NAT rules found"
+    
+    echo "2. Checking FORWARD rules:"
+    iptables -L FORWARD -n -v | grep -E "br-$vpc_name" || echo "  No FORWARD rules found"
+    
+    echo "3. Checking IP forwarding:"
+    cat /proc/sys/net/ipv4/ip_forward
+    
+    echo "4. Checking public subnets:"
+    for namespace in $(ip netns list | grep "ns-$vpc_name-public"); do
+        local clean_ns=$(echo "$namespace" | sed 's/ (id:[0-9]*)//g')
+        echo "  - $clean_ns"
+    done
+}
+
+# === CHECK INTERNET CONNECTIVITY ===
+check_internet_connectivity() {
+    local namespace="$1"
+    
+    echo "Checking internet connectivity for $namespace"
+    
+    # Test DNS resolution
+    echo -n "  DNS resolution: "
+    if ip netns exec "$namespace" nslookup google.com 8.8.8.8 &>/dev/null; then
+        echo "✅ WORKS"
+    else
+        echo "❌ FAILED"
+    fi
+    
+    # Test HTTP access
+    echo -n "  HTTP access: "
+    if ip netns exec "$namespace" curl -s --connect-timeout 3 -I http://google.com &>/dev/null; then
+        echo "✅ WORKS"
+    else
+        echo "❌ FAILED"
+    fi
+    
+    # Test ICMP (ping)
+    echo -n "  ICMP (ping): "
+    if ip netns exec "$namespace" ping -c 1 -W 1 8.8.8.8 &>/dev/null; then
+        echo "✅ WORKS"
+    else
+        echo "❌ FAILED"
+    fi
+}
+
+# === DIAGNOSE NAT ISSUES ===
+diagnose_nat_issues() {
+    local vpc_name="$1"
+    
+    echo "=== NAT Issue Diagnosis for VPC: $vpc_name ==="
+    
+    echo "1. Host internet connectivity:"
+    ping -c 1 -W 1 8.8.8.8 &>/dev/null && echo "  ✅ Host has internet" || echo "  ❌ Host no internet"
+    
+    echo "2. IP forwarding status:"
+    local ip_forward=$(cat /proc/sys/net/ipv4/ip_forward)
+    if [[ "$ip_forward" == "1" ]]; then
+        echo "  ✅ IP forwarding enabled"
+    else
+        echo "  ❌ IP forwarding disabled"
+    fi
+    
+    echo "3. Public interface:"
+    local public_if=$(get_public_interface)
+    if [[ -n "$public_if" ]]; then
+        echo "  ✅ Public interface: $public_if"
+    else
+        echo "  ❌ No public interface found"
+    fi
+    
+    echo "4. NAT rules:"
+    iptables -t nat -L POSTROUTING -n -v | grep MASQUERADE || echo "  No MASQUERADE rules"
+    
+    echo "5. Public subnets:"
+    local found_public=0
+    for namespace in $(ip netns list | grep "ns-$vpc_name-public"); do
+        local clean_ns=$(echo "$namespace" | sed 's/ (id:[0-9]*)//g')
+        echo "  - $clean_ns"
+        found_public=1
+    done
+    if [[ $found_public -eq 0 ]]; then
+        echo "  ❌ No public subnets found"
+    fi
+}
+
+# === RESET NAT RULES ===
+reset_nat_rules() {
+    local vpc_name="$1"
+    
+    echo "Resetting NAT rules for VPC: $vpc_name"
+    
+    # Remove all rules for this VPC
+    cleanup_nat_rules "$vpc_name"
+    
+    # Re-enable NAT
+    enable_nat "$vpc_name"
+    
+    echo "NAT rules reset for VPC $vpc_name"
+}
+
+# === LIST NAT RULES ===
+list_nat_rules() {
+    echo "=== Current NAT Rules ==="
+    
+    echo "NAT Table:"
+    iptables -t nat -L -n -v
+    
+    echo ""
+    echo "Filter Table (FORWARD):"
+    iptables -L FORWARD -n -v
+}
+
+# === RUN ALL TESTS ===
+run_nat_tests() {
+    local vpc_name="$1"
+    
+    echo "=== Running Comprehensive NAT Tests for VPC: $vpc_name ==="
+    
+    verify_nat_setup "$vpc_name"
+    echo ""
+    test_connectivity "$vpc_name"
+    echo ""
+    diagnose_nat_issues "$vpc_name"
 }
