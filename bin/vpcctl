@@ -9,36 +9,43 @@ source "$PROJECT_ROOT/lib/vpc_core.sh"
 source "$PROJECT_ROOT/lib/subnet_manager.sh" 
 source "$PROJECT_ROOT/lib/firewall.sh"
 source "$PROJECT_ROOT/lib/peering.sh"
-source "$PROJECT_ROOT/lib/nat_gateway.sh"  # NEW: NAT functionality
+source "$PROJECT_ROOT/lib/nat_gateway.sh"
 source "$PROJECT_ROOT/config/defaults.sh"
 
 # Main dispatcher
 main() {
     case "$1" in
-        create-vpc)    create_vpc "$2" "$3" ;;
-        delete-vpc)    delete_vpc "$2" ;;
-        add-subnet)    add_subnet "$2" "$3" "$4" ;;
-        enable-nat)    enable_nat "$2" ;;      # NEW: Enable NAT for VPC
-        test-connectivity) test_connectivity "$2" ;; # NEW: Test internet access
-        list-vpcs)     list_vpcs ;;
-        list-subnets)  list_subnets ;;  
-        *)             show_usage ;;
+        create-vpc)        create_vpc "$2" "$3" ;;
+        delete-vpc)        delete_vpc "$2" ;;
+        add-subnet)        add_subnet "$2" "$3" "$4" ;;
+        enable-nat)        enable_nat "$2" ;;
+        create-peering)    create_peering "$2" "$3" ;;  # NEW: VPC peering
+        delete-peering)    delete_peering "$2" "$3" ;;  # NEW: Remove peering
+        list-peerings)     list_peerings ;;             # NEW: List peerings
+        test-connectivity) test_connectivity "$2" ;;
+        test-isolation)    test_isolation "$2" "$3" ;;  # NEW: Test VPC isolation
+        deploy-app)        deploy_app "$2" "$3" "$4" ;; # NEW: Deploy test apps
+        list-vpcs)         list_vpcs ;;
+        list-subnets)      list_subnets ;;  
+        *)                 show_usage ;;
     esac
 }
 
 show_usage() {
     echo "VPC Management System"
-    echo "Usage: $0 {create-vpc|delete-vpc|add-subnet|enable-nat|test-connectivity|list-vpcs|list-subnets}"
+    echo "Usage: $0 {create-vpc|delete-vpc|add-subnet|enable-nat|create-peering|delete-peering|list-peerings|test-connectivity|test-isolation|deploy-app|list-vpcs|list-subnets}"
     echo ""
     echo "Examples:"
-    echo "  sudo $0 create-vpc my-vpc 10.0.0.0/16"
-    echo "  sudo $0 add-subnet my-vpc public 10.0.1.0/24"
-    echo "  sudo $0 add-subnet my-vpc private 10.0.2.0/24"
-    echo "  sudo $0 enable-nat my-vpc           # Enable internet for public subnets"
-    echo "  sudo $0 test-connectivity my-vpc    # Test public/private subnet access"
-    echo "  sudo $0 list-vpcs"
-    echo "  sudo $0 list-subnets"
-    echo "  sudo $0 delete-vpc my-vpc"
+    echo "  sudo $0 create-vpc vpc-a 10.0.0.0/16"
+    echo "  sudo $0 create-vpc vpc-b 10.1.0.0/16"
+    echo "  sudo $0 add-subnet vpc-a public 10.0.1.0/24"
+    echo "  sudo $0 add-subnet vpc-b public 10.1.1.0/24"
+    echo "  sudo $0 enable-nat vpc-a"
+    echo "  sudo $0 create-peering vpc-a vpc-b     # Connect VPCs"
+    echo "  sudo $0 test-isolation vpc-a vpc-b     # Test before/after peering"
+    echo "  sudo $0 deploy-app vpc-a public nginx  # Deploy test web server"
+    echo "  sudo $0 list-peerings                  # Show VPC connections"
+    echo "  sudo $0 delete-peering vpc-a vpc-b     # Disconnect VPCs"
 }
 
 if [ $# -eq 0 ]; then
