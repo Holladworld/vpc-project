@@ -9,6 +9,7 @@ source "$PROJECT_ROOT/lib/vpc_core.sh"
 source "$PROJECT_ROOT/lib/subnet_manager.sh" 
 source "$PROJECT_ROOT/lib/firewall.sh"
 source "$PROJECT_ROOT/lib/peering.sh"
+source "$PROJECT_ROOT/lib/nat_gateway.sh"  # NEW: NAT functionality
 source "$PROJECT_ROOT/config/defaults.sh"
 
 # Main dispatcher
@@ -17,6 +18,8 @@ main() {
         create-vpc)    create_vpc "$2" "$3" ;;
         delete-vpc)    delete_vpc "$2" ;;
         add-subnet)    add_subnet "$2" "$3" "$4" ;;
+        enable-nat)    enable_nat "$2" ;;      # NEW: Enable NAT for VPC
+        test-connectivity) test_connectivity "$2" ;; # NEW: Test internet access
         list-vpcs)     list_vpcs ;;
         list-subnets)  list_subnets ;;  
         *)             show_usage ;;
@@ -25,11 +28,14 @@ main() {
 
 show_usage() {
     echo "VPC Management System"
-    echo "Usage: $0 {create-vpc|delete-vpc|add-subnet|list-vpcs|list-subnets}"
+    echo "Usage: $0 {create-vpc|delete-vpc|add-subnet|enable-nat|test-connectivity|list-vpcs|list-subnets}"
     echo ""
     echo "Examples:"
     echo "  sudo $0 create-vpc my-vpc 10.0.0.0/16"
     echo "  sudo $0 add-subnet my-vpc public 10.0.1.0/24"
+    echo "  sudo $0 add-subnet my-vpc private 10.0.2.0/24"
+    echo "  sudo $0 enable-nat my-vpc           # Enable internet for public subnets"
+    echo "  sudo $0 test-connectivity my-vpc    # Test public/private subnet access"
     echo "  sudo $0 list-vpcs"
     echo "  sudo $0 list-subnets"
     echo "  sudo $0 delete-vpc my-vpc"
